@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"io/ioutil"
 	"os"
 
@@ -14,14 +13,14 @@ type Config struct {
 	Listen string `yaml:"listen"`
 }
 
-var ConfigParam Config = Config{""}
+var ConfigParam = Config{""}
 
 func checkConfFile() bool {
 	if _, err := os.Stat(confFile); os.IsNotExist(err) {
-		fmt.Println("conf.yaml does not exist")
+		LOGE("conf.yaml does not exist")
 		return false
 	} else {
-		fmt.Println("conf.yaml exists")
+		LOGI("conf.yaml exists")
 		return true
 	}
 }
@@ -29,17 +28,17 @@ func checkConfFile() bool {
 func loadConf() bool {
 	data, err := ioutil.ReadFile("conf.yaml")
 	if err != nil {
-		fmt.Println(err)
+		LOGE("fail to load ", confFile, err)
 		return false
 	}
 
 	var config Config
 	err = yaml.Unmarshal(data, &config)
 	if err != nil {
-		fmt.Println(err)
+		LOGE("fail to unmarshal ", confFile, err)
 		return false
 	} else {
-		fmt.Println(config)
+		LOGI(config)
 		ConfigParam = config
 	}
 
