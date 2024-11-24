@@ -9,20 +9,20 @@ import (
 )
 
 const (
-	MessageTypeLocal      = "local"
-	MessageTypeUpstream   = "upstream"
-	MessageTypeDownstream = "downstream"
+	MessageClassLocal      = "local"
+	MessageClassUpstream   = "upstream"
+	MessageClassDownstream = "downstream"
 )
 
 const (
-	MessageClassConnect   = "connect"
-	MessageClasDisconnect = "disconnect"
-	MessageClasData       = "data"
+	MessageTypeConnect    = "connect"
+	MessageTypeDisconnect = "disconnect"
+	MessageTypeData       = "data"
 )
 
 type Message struct {
-	MessageType  string `json:"message_type"`
 	MessageClass string `json:"message_class"`
+	MessageType  string `json:"message_type"`
 	UUID         string `json:"uuid"`
 	IPStr        string `json:"ip_str"`
 	Length       int    `json:"length"`
@@ -31,30 +31,36 @@ type Message struct {
 
 var listener net.Listener
 var conn net.Conn
+var status int
 
 type ConnectionInfo struct {
-	uuid       string
 	IPStr      string
 	Conn       net.Conn
 	Status     int
-	MsgChannel chan Message
+	MsgChannel chan Message //cache upstream message
 	Timestamp  int64
 }
+
+const (
+	Connected = iota + 1
+	Disconnected
+)
 
 var messageChannel = make(chan Message, 10000)
 var connections = make(map[string]ConnectionInfo)
 
 func initServerTls() bool {
+	LOGI("Starting TLS server")
 	cert, err := tls.LoadX509KeyPair("test.pem", "test.key")
 	if err != nil {
-		LOGE(" loading certificate:", err)
+		LOGE("fail to load certificate, ", err)
 		return false
 	}
 
 	config := &tls.Config{Certificates: []tls.Certificate{cert}}
 	tmpListener, err := tls.Listen("tcp", ConfigParam.Listen, config)
 	if err != nil {
-		LOGE("starting TLS listener:", err)
+		LOGE("fail to start TLS listener, ", err)
 		return false
 	}
 	listener = tmpListener
@@ -62,9 +68,10 @@ func initServerTls() bool {
 }
 
 func initServer() bool {
+	LOGI("Starting server without TLS")
 	tmpListener, err := net.Listen("tcp", ConfigParam.Listen)
 	if err != nil {
-		LOGE("Error starting listener:", err)
+		LOGE("fail to start listener, ", err)
 		return false
 	}
 	listener = tmpListener
@@ -75,62 +82,61 @@ func closeServer() {
 	if listener != nil {
 		err := listener.Close()
 		if err != nil {
-			LOGE("Error closing listener:", err)
+			LOGE("fail to close listener, ", err)
 		} else {
-			fmt.Println("Server closed")
+			LOGI("listener closed")
 		}
-		fmt.Println("Error closing listener:", err)
 	} else {
-		fmt.Println("Server closed")
+		LOGI("Server closed")
 	}
 }
 
 func startServer() {
-	fmt.Println("Server started")
-	fmt.Println("Listening on ", ConfigParam.Listen)
+	LOGI("Server started, Listening on ", ConfigParam.Listen)
 	go handleEvents()
 	for {
-
 		tmpConn, err := listener.Accept()
 		if err != nil {
-			fmt.Println("Error accepting:", err)
+			LOGE("fail to accepting, ", err)
 			continue
 		}
 
-		if conn != nil {
+		if conn != nil || status == Connected {
 			fmt.Println("Only one client is allowed to connect at a time")
 			tmpConn.Close()
 			continue
 		} else {
 			conn = tmpConn
+			status = Connected
 		}
 
-		go handleRcv(conn)
+		go rcvServer(conn)
 	}
 }
 
-func handleRcv(conn net.Conn) {
-	// 处理连接的逻辑
-	fmt.Println("New connection accepted")
+func rcvServer(conn net.Conn) {
+	LOGI("downstream connect to upstream")
 
 	buf := make([]byte, 10240)
 	for {
 		n, err := conn.Read(buf)
 		if err != nil {
-			LOGE("Error reading:", err)
+			LOGE("upstream fail to read data from downstream, ", err)
 			conn.Close()
-			LOGI("Connection closed")
 			conn = nil
+			status = Disconnected
+			LOGI(" downstream connection closed")
 			return
 		} else {
-			LOGI("Received message from downstream:", n)
+			LOGI("upstream read message from downstream, length ", n)
 			var msg Message
 			err = json.Unmarshal(buf[:n], &msg)
 			if err != nil {
-				fmt.Println("Error unmarshaling:", err)
+				LOGE("upstream fail to unmarshaling ", err)
 				continue
+			} else {
+				messageChannel <- msg
 			}
-			messageChannel <- msg
 		}
 	}
 }
@@ -139,10 +145,10 @@ func handleEvents() {
 	for {
 		select {
 		case message := <-messageChannel:
-			switch message.MessageType {
-			case MessageTypeLocal:
+			switch message.MessageClass {
+			case MessageClassLocal:
 				handleEventLocal(message)
-			case MessageTypeUpstream:
+			case MessageClassUpstream:
 				handleEventUpstream(message)
 			}
 		}
@@ -150,79 +156,72 @@ func handleEvents() {
 }
 
 func handleEventLocal(msg Message) {
-	switch msg.MessageClass {
-	case MessageClasDisconnect:
+	switch msg.MessageType {
+	case MessageTypeConnect: //proxy connect to remote server
+		connection, exists := connections[msg.UUID]
+		if exists {
+			connection.Timestamp = time.Now().Unix()
+			go handleClientRcv(connection.Conn, msg.UUID)
+			go handleClientSnd(connection.Conn, connection.MsgChannel)
+		} else {
+			LOGE(msg.UUID, " fail to find connection between proxy and remote-server")
+		}
+	case MessageTypeDisconnect:
 		delete(connections, msg.UUID)
-	case MessageClasData:
-		msg.MessageType = MessageTypeDownstream
+	case MessageTypeData:
+		msg.MessageClass = MessageClassDownstream
 		data, err := json.Marshal(msg)
 		if err != nil {
-			LOGE("Error marshaling message:", err)
+			LOGE(msg.UUID, " fail to marshaling message, ", err)
 			return
 		}
 		_, err = conn.Write(data)
 		if err != nil {
-			LOGE("Error writing:", err)
+			LOGE(msg.UUID, " upstream fail to send event-data to downstream, ", err)
 			return
 		} else {
-			fmt.Println("Sent message to downstream, length:", len(data))
+			LOGI(msg.UUID, " upstream sent event-data to downstream, length ", len(data))
 		}
 	}
 }
 
 func handleEventUpstream(msg Message) {
-	_, err := conn.Write(msg.Data)
-	if err != nil {
-		fmt.Println("Error writing:", err)
-		return
-	} else {
-		fmt.Println("Sent message to downstream, length:", msg.Length)
-	}
-}
-
-func handleEventConnection(msg Message) {
-	conn := initClient(msg.IPStr, msg.UUID)
-	if conn == nil {
-		fmt.Println("Error connecting to client")
-		return
-	}
-
-	connection := ConnectionInfo{
-		uuid:      msg.UUID,
-		IPStr:     msg.IPStr,
-		Conn:      conn,
-		Timestamp: time.Now().Unix(),
-	}
-	connections[msg.UUID] = connection
-}
-
-func handleEventDisconnect(msg Message) {
-
-}
-
-func handleEventMsg(msg Message) {
-	if msg.MessageType == "upstream" {
+	switch msg.MessageType {
+	case MessageTypeConnect: //connect to remote server
+		connection := ConnectionInfo{
+			IPStr:      msg.IPStr,
+			Conn:       nil,
+			Status:     Disconnected,
+			MsgChannel: make(chan Message, 1000),
+			Timestamp:  time.Now().Unix(),
+		}
+		connections[msg.UUID] = connection
+		initClient(msg.IPStr, msg.UUID)
+	case MessageTypeData:
 		connection, exists := connections[msg.UUID]
-		if !exists {
-			fmt.Println("Error: connection not found")
-			return
-		}
-		_, err := connection.Conn.Write(msg.Data)
-		if err != nil {
-			fmt.Println("Error writing:", err)
-			return
+		if exists {
+			connection.MsgChannel <- msg
 		} else {
-			fmt.Println("Sent message to server, length:", msg.Length)
+			LOGE(msg.UUID, " connection not found")
 		}
-	} else {
-
+	default:
+		LOGE("Unknown message type")
 	}
 }
 
-func serverAddEventDisconnect(uuid string) {
+func AddEventConnect(uuid string, conn net.Conn) {
+	connection, exists := connections[uuid]
+	if exists {
+		connection.Conn = conn
+		connection.Status = Connected
+	} else {
+		LOGE(uuid, " fail to find the connection")
+		return
+	}
+
 	message := Message{
-		MessageType:  MessageTypeLocal,
-		MessageClass: MessageClasDisconnect,
+		MessageClass: MessageClassLocal,
+		MessageType:  MessageTypeConnect,
 		UUID:         uuid,
 		IPStr:        "",
 		Length:       0,
@@ -231,18 +230,26 @@ func serverAddEventDisconnect(uuid string) {
 	messageChannel <- message
 }
 
-func serverAddEventMsg(uuid string, buf []byte, len int) {
+func AddEventDisconnect(uuid string) {
 	message := Message{
-		MessageType:  MessageTypeLocal,
-		MessageClass: MessageClasData,
+		MessageClass: MessageClassLocal,
+		MessageType:  MessageTypeDisconnect,
+		UUID:         uuid,
+		IPStr:        "",
+		Length:       0,
+		Data:         nil,
+	}
+	messageChannel <- message
+}
+
+func AddEventMsg(uuid string, buf []byte, len int) {
+	message := Message{
+		MessageClass: MessageClassLocal,
+		MessageType:  MessageTypeData,
 		UUID:         uuid,
 		IPStr:        "",
 		Length:       len,
 		Data:         buf[:len],
-	}
-	connection, exists := connections[uuid]
-	if exists {
-		connection.Timestamp = time.Now().Unix()
 	}
 	messageChannel <- message
 }
