@@ -214,6 +214,7 @@ func AddEventConnect(uuid string, conn net.Conn) {
 	if exists {
 		connection.Conn = conn
 		connection.Status = Connected
+		connections[uuid] = connection
 	} else {
 		LOGE(uuid, " fail to find the connection")
 		return
