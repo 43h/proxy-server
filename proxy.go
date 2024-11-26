@@ -20,8 +20,8 @@ func connectToRemoteServer(serverAddr string, uuid string) {
 }
 
 func handleClientRcv(conn net.Conn, uuid string) {
-	buf := make([]byte, 10240)
 	for {
+		buf := make([]byte, 4096)
 		n, err := conn.Read(buf)
 		if err != nil {
 			LOGE(uuid, " proxy<---server, read, ", err)
