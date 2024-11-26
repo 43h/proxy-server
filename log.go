@@ -77,13 +77,13 @@ func LOGD(v ...interface{}) {
 
 func LOGI(v ...interface{}) {
 	if logLevel <= INFO {
-		log.Println("[INFO] ", v)
+		log.Println("[ INFO] ", v)
 	}
 }
 
 func LOGW(v ...interface{}) {
 	if logLevel <= WARN {
-		log.Println("[WARN] ", v)
+		log.Println("[ WARN] ", v)
 	}
 }
 
