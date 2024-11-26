@@ -2,9 +2,12 @@ package main
 
 import (
 	"crypto/tls"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
+	"sync"
 	"time"
 )
 
@@ -47,6 +50,8 @@ const (
 )
 
 var messageChannel = make(chan Message, 10000)
+
+var connectionsLock sync.RWMutex
 var connections = make(map[string]ConnectionInfo)
 
 func initServerTls() bool {
@@ -110,33 +115,46 @@ func startServer() {
 			status = Connected
 		}
 
-		go rcvServer(conn)
+		go rcvServer()
 	}
 }
 
-func rcvServer(conn net.Conn) {
+func rcvServer() {
 	LOGI("downstream connect to upstream")
 
-	buf := make([]byte, 10240)
 	for {
-		n, err := conn.Read(buf)
+		lengthBuf := make([]byte, 4)
+		lenData, err := io.ReadFull(conn, lengthBuf)
 		if err != nil {
-			LOGE("upstream fail to read data from downstream, ", err)
-			conn.Close()
-			conn = nil
-			status = Disconnected
-			LOGI(" downstream connection closed")
+			if err != io.EOF {
+				LOGE("downstream--->upstream, read length, fail, ", err)
+			} else {
+				LOGE("downstream--->upstream, read length, fail, ", err)
+				conn = nil
+				status = Disconnected
+				return
+			}
+		} else {
+			LOGI("downstream--->upstream, read length, ", lenData)
+		}
+
+		length := binary.BigEndian.Uint32(lengthBuf)
+		dataBuf := make([]byte, length)
+		rcvLength, err := io.ReadFull(conn, dataBuf)
+		if err != nil {
+			LOGE("downstream--->upstream, read data, fail, ", err)
 			return
 		} else {
-			LOGI("upstream read message from downstream, length ", n)
-			var msg Message
-			err = json.Unmarshal(buf[:n], &msg)
-			if err != nil {
-				LOGE("upstream fail to unmarshaling ", err)
-				continue
-			} else {
-				messageChannel <- msg
-			}
+			LOGI("downstream--->upstream, read date, ", rcvLength)
+		}
+
+		var msg Message
+		err = json.Unmarshal(dataBuf, &msg)
+		if err != nil {
+			LOGE("upstream fail to unmarshaling message,", err)
+			return
+		} else {
+			messageChannel <- msg
 		}
 	}
 }
@@ -158,16 +176,20 @@ func handleEvents() {
 func handleEventLocal(msg Message) {
 	switch msg.MessageType {
 	case MessageTypeConnect: //proxy connect to remote server
+		connectionsLock.RLock()
 		connection, exists := connections[msg.UUID]
+		connectionsLock.RUnlock()
 		if exists {
 			connection.Timestamp = time.Now().Unix()
 			go handleClientRcv(connection.Conn, msg.UUID)
 			go handleClientSnd(connection.Conn, connection.MsgChannel)
 		} else {
-			LOGE(msg.UUID, " fail to find connection between proxy and remote-server")
+			LOGE(msg.UUID, " fail to find connection between proxy and server")
 		}
 	case MessageTypeDisconnect:
+		connectionsLock.Lock()
 		delete(connections, msg.UUID)
+		connectionsLock.Unlock()
 	case MessageTypeData:
 		msg.MessageClass = MessageClassDownstream
 		data, err := json.Marshal(msg)
@@ -175,12 +197,12 @@ func handleEventLocal(msg Message) {
 			LOGE(msg.UUID, " fail to marshaling message, ", err)
 			return
 		}
-		_, err = conn.Write(data)
+		length, err := sndToDownstream(conn, data)
 		if err != nil {
-			LOGE(msg.UUID, " upstream fail to send event-data to downstream, ", err)
+			LOGE(msg.UUID, " downstream<---upstream, send event-data, fail, ", err)
 			return
 		} else {
-			LOGI(msg.UUID, " upstream sent event-data to downstream, length ", len(data))
+			LOGI(msg.UUID, " downstream<---upstream, sent event-data, ", length)
 		}
 	}
 }
@@ -195,10 +217,14 @@ func handleEventUpstream(msg Message) {
 			MsgChannel: make(chan Message, 1000),
 			Timestamp:  time.Now().Unix(),
 		}
+		connectionsLock.Lock()
 		connections[msg.UUID] = connection
+		connectionsLock.Unlock()
 		initClient(msg.IPStr, msg.UUID)
 	case MessageTypeData:
+		connectionsLock.RLock()
 		connection, exists := connections[msg.UUID]
+		connectionsLock.RUnlock()
 		if exists {
 			connection.MsgChannel <- msg
 		} else {
@@ -210,11 +236,15 @@ func handleEventUpstream(msg Message) {
 }
 
 func AddEventConnect(uuid string, conn net.Conn) {
+	connectionsLock.RLock()
 	connection, exists := connections[uuid]
+	connectionsLock.RUnlock()
 	if exists {
 		connection.Conn = conn
 		connection.Status = Connected
+		connectionsLock.Lock()
 		connections[uuid] = connection
+		connectionsLock.Unlock()
 	} else {
 		LOGE(uuid, " fail to find the connection")
 		return
@@ -253,4 +283,13 @@ func AddEventMsg(uuid string, buf []byte, len int) {
 		Data:         buf[:len],
 	}
 	messageChannel <- message
+}
+
+func sndToDownstream(conn net.Conn, data []byte) (n int, err error) {
+	length := uint32(len(data))
+
+	buf := make([]byte, 4+length)
+	binary.BigEndian.PutUint32(buf[:4], length)
+	copy(buf[4:], data)
+	return conn.Write(buf)
 }
