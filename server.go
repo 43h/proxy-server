@@ -55,17 +55,17 @@ var connectionsLock sync.RWMutex
 var connections = make(map[string]ConnectionInfo)
 
 func initServerTls() bool {
-	LOGI("Starting TLS server")
+	LOGI("upstream start with TLS")
 	cert, err := tls.LoadX509KeyPair("test.pem", "test.key")
 	if err != nil {
-		LOGE("fail to load certificate, ", err)
+		LOGE("upstream fail to load certificate, ", err)
 		return false
 	}
 
 	config := &tls.Config{Certificates: []tls.Certificate{cert}}
 	tmpListener, err := tls.Listen("tcp", ConfigParam.Listen, config)
 	if err != nil {
-		LOGE("fail to start TLS listener, ", err)
+		LOGE("upstream fail to start TLS listener, ", err)
 		return false
 	}
 	listener = tmpListener
@@ -73,10 +73,10 @@ func initServerTls() bool {
 }
 
 func initServer() bool {
-	LOGI("Starting server without TLS")
+	LOGI("upstream start without TLS")
 	tmpListener, err := net.Listen("tcp", ConfigParam.Listen)
 	if err != nil {
-		LOGE("fail to start listener, ", err)
+		LOGE("upstream fail to start listener, ", err)
 		return false
 	}
 	listener = tmpListener
@@ -87,22 +87,22 @@ func closeServer() {
 	if listener != nil {
 		err := listener.Close()
 		if err != nil {
-			LOGE("fail to close listener, ", err)
+			LOGE("upstream close listener, fail, ", err)
 		} else {
-			LOGI("listener closed")
+			LOGI("upstream close listener, success")
 		}
 	} else {
-		LOGI("Server closed")
+		LOGI("upstream close listener(SKIP)")
 	}
 }
 
 func startServer() {
-	LOGI("Server started, Listening on ", ConfigParam.Listen)
+	LOGI("upstream started, Listening on ", ConfigParam.Listen)
 	go handleEvents()
 	for {
 		tmpConn, err := listener.Accept()
 		if err != nil {
-			LOGE("fail to accepting, ", err)
+			LOGE("upstream accepting, fail ", err)
 			continue
 		}
 
@@ -126,16 +126,12 @@ func rcvServer() {
 		lengthBuf := make([]byte, 4)
 		lenData, err := io.ReadFull(conn, lengthBuf)
 		if err != nil {
-			if err != io.EOF {
-				LOGE("downstream--->upstream, read length, fail, ", err)
-			} else {
-				LOGE("downstream--->upstream, read length, fail, ", err)
-				conn = nil
-				status = Disconnected
-				return
-			}
+			LOGE("downstream--->upstream, read length, fail, ", err)
+			conn = nil
+			status = Disconnected
+			return
 		} else {
-			LOGI("downstream--->upstream, read length, ", lenData)
+			LOGD("downstream--->upstream, read length, success, length: ", lenData)
 		}
 
 		length := binary.BigEndian.Uint32(lengthBuf)
@@ -145,13 +141,13 @@ func rcvServer() {
 			LOGE("downstream--->upstream, read data, fail, ", err)
 			return
 		} else {
-			LOGI("downstream--->upstream, read date, ", rcvLength)
+			LOGD("downstream--->upstream, read date, success, need: ", length, " read: ", rcvLength, "total: ", rcvLength+4)
 		}
 
 		var msg Message
 		err = json.Unmarshal(dataBuf, &msg)
 		if err != nil {
-			LOGE("upstream fail to unmarshaling message,", err)
+			LOGE("upstream unmarshaling message, fail, ", err)
 			return
 		} else {
 			messageChannel <- msg
@@ -184,7 +180,7 @@ func handleEventLocal(msg Message) {
 			go handleClientRcv(connection.Conn, msg.UUID)
 			go handleClientSnd(connection.Conn, connection.MsgChannel)
 		} else {
-			LOGE(msg.UUID, " fail to find connection between proxy and server")
+			LOGE(msg.UUID, " connection not found")
 		}
 	case MessageTypeDisconnect:
 		connectionsLock.Lock()
@@ -194,15 +190,15 @@ func handleEventLocal(msg Message) {
 		msg.MessageClass = MessageClassDownstream
 		data, err := json.Marshal(msg)
 		if err != nil {
-			LOGE(msg.UUID, " fail to marshaling message, ", err)
+			LOGE(msg.UUID, " marshaling message, fail, ", err)
 			return
 		}
 		length, err := sndToDownstream(conn, data)
 		if err != nil {
-			LOGE(msg.UUID, " downstream<---upstream, send event-data, fail, ", err)
+			LOGE(msg.UUID, " downstream<---upstream, write, event-data, fail, ", err)
 			return
 		} else {
-			LOGI(msg.UUID, " downstream<---upstream, sent event-data, ", length)
+			LOGD(msg.UUID, " downstream<---upstream, write, event-data, success, length: ", length)
 		}
 	}
 }

@@ -38,7 +38,7 @@ func loadConf() bool {
 		LOGE("fail to unmarshal ", confFile, err)
 		return false
 	} else {
-		LOGI(config)
+		LOGI("config:", config)
 		ConfigParam = config
 	}
 

@@ -2,13 +2,20 @@ package main
 
 import (
 	"flag"
+	"fmt"
 )
 
-var logToFile = flag.Bool("l", false, "log")
+var logDebug = flag.Bool("d", false, "debug mode")
+var version = flag.Bool("v", false, "print version and exit")
 
 func main() {
 	flag.Parse()
-	if initLog(*logToFile) == false {
+	if *version {
+		fmt.Println("v0.0.1-20241127")
+		return
+	}
+
+	if initLog(*logDebug) == false {
 		return
 	}
 	defer closeLog()

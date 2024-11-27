@@ -12,15 +12,15 @@ import (
 const (
 	DEBUG = iota
 	INFO
-	WARN
 	ERROR
 )
 
-var logLevel = DEBUG
+var logLevel = INFO
 var logHandle *os.File
 
 func initLog(flag bool) bool {
-	if flag == false {
+	if flag == true {
+		logLevel = DEBUG
 		return true
 	}
 
@@ -42,7 +42,7 @@ func closeLog() {
 	if logHandle != nil {
 		err := logHandle.Close()
 		if err != nil {
-			log.Println("fail to close file, ", err)
+			log.Println("fail to close log file, ", err)
 		}
 	}
 }
@@ -78,12 +78,6 @@ func LOGD(v ...interface{}) {
 func LOGI(v ...interface{}) {
 	if logLevel <= INFO {
 		log.Println("[ INFO] ", v)
-	}
-}
-
-func LOGW(v ...interface{}) {
-	if logLevel <= WARN {
-		log.Println("[ WARN] ", v)
 	}
 }
 
