@@ -2,7 +2,6 @@ package main
 
 import (
 	"crypto/tls"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,20 +11,20 @@ import (
 )
 
 const (
-	MessageClassLocal      = "local"
-	MessageClassUpstream   = "upstream"
-	MessageClassDownstream = "downstream"
+	MessageClassLocal      = 1
+	MessageClassUpstream   = 2
+	MessageClassDownstream = 3
 )
 
 const (
-	MessageTypeConnect    = "connect"
-	MessageTypeDisconnect = "disconnect"
-	MessageTypeData       = "data"
+	MessageTypeConnect    = 1
+	MessageTypeDisconnect = 2
+	MessageTypeData       = 3
 )
 
 type Message struct {
-	MessageClass string `json:"message_class"`
-	MessageType  string `json:"message_type"`
+	MessageClass int    `json:"message_class"`
+	MessageType  int    `json:"message_type"`
 	UUID         string `json:"uuid"`
 	IPStr        string `json:"ip_str"`
 	Length       int    `json:"length"`
@@ -123,7 +122,7 @@ func rcvServer() {
 	LOGI("downstream connect to upstream")
 
 	for {
-		lengthBuf := make([]byte, 4)
+		lengthBuf := make([]byte, 2)
 		lenData, err := io.ReadFull(conn, lengthBuf)
 		if err != nil {
 			LOGE("downstream--->upstream, read length, fail, ", err)
@@ -134,7 +133,7 @@ func rcvServer() {
 			LOGD("downstream--->upstream, read length, success, length: ", lenData)
 		}
 
-		length := binary.BigEndian.Uint32(lengthBuf)
+		length := int(lengthBuf[0])<<8 + int(lengthBuf[1])
 		dataBuf := make([]byte, length)
 		rcvLength, err := io.ReadFull(conn, dataBuf)
 		if err != nil {
@@ -147,7 +146,7 @@ func rcvServer() {
 		var msg Message
 		err = json.Unmarshal(dataBuf, &msg)
 		if err != nil {
-			LOGE("upstream unmarshaling message, fail, ", err)
+			LOGE("upstream unmarshalling message, fail, ", err)
 			return
 		} else {
 			messageChannel <- msg
@@ -282,10 +281,18 @@ func AddEventMsg(uuid string, buf []byte, len int) {
 }
 
 func sndToDownstream(conn net.Conn, data []byte) (n int, err error) {
-	length := uint32(len(data))
-
-	buf := make([]byte, 4+length)
-	binary.BigEndian.PutUint32(buf[:4], length)
-	copy(buf[4:], data)
-	return conn.Write(buf)
+	length := len(data)
+	lenBytes := []byte{byte(length >> 8), byte(length & 0xff)}
+	n, err = conn.Write(lenBytes) //发送长度
+	if err == nil {
+		LOGD("downstream<---upstream, write, body: ", length, "length: ", n)
+		_, err := conn.Write(data) //发送数据
+		if err != nil {
+			return 0, err
+		} else {
+			return length, nil
+		}
+	} else {
+		return 0, err
+	}
 }

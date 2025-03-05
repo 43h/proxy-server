@@ -5,10 +5,10 @@ import (
 )
 
 func initClient(serverAddr string, uuid string) {
-	go connectToRemoteServer(serverAddr, uuid) //use goroutine to connect to remote server
+	go connectToRealServer(serverAddr, uuid) //use goroutine to connect to remote server
 }
 
-func connectToRemoteServer(serverAddr string, uuid string) {
+func connectToRealServer(serverAddr string, uuid string) {
 	conn, err := net.Dial("tcp", serverAddr)
 	if err != nil {
 		AddEventDisconnect(uuid)
