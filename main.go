@@ -11,7 +11,7 @@ var version = flag.Bool("v", false, "print version and exit")
 func main() {
 	flag.Parse()
 	if *version {
-		fmt.Println("v0.0.1-20241127")
+		fmt.Println("v0.0.1-20250306")
 		return
 	}
 
